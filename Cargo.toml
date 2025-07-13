@@ -18,6 +18,21 @@ esp-hal-embassy  = { version = "0.8.1", features = ["esp32c3"] }
 static_cell      = { version = "2.1.0", features = ["nightly"] }
 esp-println      = { version = "0.14.0", features = ["esp32c3", "log-04"] }
 log = "0.4.27"
+embassy-net = { version = "0.7.0", features = ["tcp", "udp", "dhcpv4", "medium-ethernet", "dns","alloc"] }
+smoltcp = { version = "0.12.0", default-features = false, features = [
+    "medium-ethernet",
+    "proto-dhcpv4",
+    "proto-ipv4",
+    "socket-dhcpv4",
+    "socket-icmp",
+    "socket-raw",
+    "socket-tcp",
+    "socket-udp",
+    # addition:
+    "dns-max-server-count-4", 
+] }
+esp-alloc = "0.8.0"
+esp-wifi = { version = "0.14.1", features = ["esp32c3","smoltcp","wifi","log-04","esp-alloc"]}
 
 
 [profile.dev]

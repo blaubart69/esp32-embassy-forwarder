@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "allocator-api2"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78200ac3468a57d333cd0ea5dd398e25111194dcacd49208afca95c629a6311d"
+
+[[package]]
 name = "android-tzdata"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -57,6 +63,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
@@ -176,6 +188,47 @@ dependencies = [
 ]
 
 [[package]]
+name = "defmt"
+version = "0.3.100"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0963443817029b2024136fc4dd07a5107eb8f977eaf18fcd1fdeb11306b64ad"
+dependencies = [
+ "defmt 1.0.1",
+]
+
+[[package]]
+name = "defmt"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "548d977b6da32fa1d1fda2876453da1e7df63ad0304c8b3dae4dbe7b96f39b78"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d4fc12a85bcf441cfe44344c4b72d58493178ce635338a3f3b78943aceb258e"
+dependencies = [
+ "defmt-parser",
+ "proc-macro-error2",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "delegate"
 version = "0.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -250,6 +303,29 @@ name = "embassy-futures"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f878075b9794c1e4ac788c95b728f26aa6366d32eeb10c7051389f898f7d067"
+
+[[package]]
+name = "embassy-net"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "940c4b9fe5c1375b09a0c6722c0100d6b2ed46a717a34f632f26e8d7327c4383"
+dependencies = [
+ "document-features",
+ "embassy-net-driver",
+ "embassy-sync",
+ "embassy-time",
+ "embedded-io-async",
+ "embedded-nal-async",
+ "heapless",
+ "managed",
+ "smoltcp",
+]
+
+[[package]]
+name = "embassy-net-driver"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "524eb3c489760508f71360112bca70f6e53173e6fe48fc5f0efd0f5ab217751d"
 
 [[package]]
 name = "embassy-sync"
@@ -350,6 +426,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-nal"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c56a28be191a992f28f178ec338a0bf02f63d7803244add736d026a471e6ed77"
+dependencies = [
+ "nb 1.1.0",
+]
+
+[[package]]
+name = "embedded-nal-async"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76959917cd2b86f40a98c28dd5624eddd1fa69d746241c8257eac428d83cb211"
+dependencies = [
+ "embedded-io-async",
+ "embedded-nal",
+]
+
+[[package]]
 name = "embedded-storage"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -404,6 +499,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "esp-alloc"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e95f1de57ce5a6600368f3d3c931b0dfe00501661e96f5ab83bc5cdee031784"
+dependencies = [
+ "allocator-api2",
+ "cfg-if",
+ "critical-section",
+ "document-features",
+ "enumset",
+ "linked_list_allocator",
+]
+
+[[package]]
 name = "esp-bootloader-esp-idf"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -447,7 +556,7 @@ checksum = "0d973697621cd3eef9c3f260fa8c1af77d8547cfc92734255d8e8ddf05c7d331"
 dependencies = [
  "basic-toml",
  "bitfield",
- "bitflags",
+ "bitflags 2.9.1",
  "bytemuck",
  "cfg-if",
  "critical-section",
@@ -471,6 +580,7 @@ dependencies = [
  "esp32c3",
  "fugit",
  "instability",
+ "log",
  "nb 1.1.0",
  "paste",
  "portable-atomic",
@@ -558,6 +668,45 @@ dependencies = [
  "document-features",
  "riscv",
  "riscv-rt-macros",
+]
+
+[[package]]
+name = "esp-wifi"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3700028d3d2ee57e6d2a5c5f60544711052f8d394e73a6f534b538fbfb9d058c"
+dependencies = [
+ "allocator-api2",
+ "cfg-if",
+ "critical-section",
+ "document-features",
+ "embassy-net-driver",
+ "embedded-io",
+ "embedded-io-async",
+ "enumset",
+ "esp-alloc",
+ "esp-build",
+ "esp-config",
+ "esp-hal",
+ "esp-metadata",
+ "esp-wifi-sys",
+ "log",
+ "num-derive",
+ "num-traits",
+ "portable-atomic",
+ "portable_atomic_enum",
+ "rand_core 0.9.3",
+ "smoltcp",
+]
+
+[[package]]
+name = "esp-wifi-sys"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6b5438361891c431970194a733415006fb3d00b6eb70b3dcb66fd58f04d9b39"
+dependencies = [
+ "anyhow",
+ "log",
 ]
 
 [[package]]
@@ -744,6 +893,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1171693293099992e19cddea4e8b849964e9846f4acee11b3948bcc337be8776"
 
 [[package]]
+name = "linked_list_allocator"
+version = "0.10.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9afa463f5405ee81cdb9cc2baf37e08ec7e4c8209442b5d72c04cfb2cd6e6286"
+
+[[package]]
 name = "litrs"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -757,6 +912,12 @@ name = "log"
 version = "0.4.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13dc2df351e3202783a1fe0d44375f7295ffb4049267b0f3018346dc122a1d94"
+
+[[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
 
 [[package]]
 name = "md-5"
@@ -799,6 +960,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8d5439c4ad607c3c23abf66de8c8bf57ba8adcd1f129e699851a6e43935d339d"
 
 [[package]]
+name = "num-derive"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed3955f1a9c7c0c15e092f9c887db08b1fc683305fdf6eb6684f22555355e202"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "num-traits"
 version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -836,6 +1008,27 @@ name = "portable-atomic"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+
+[[package]]
+name = "portable_atomic_enum"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "30d48f60c43e0120bb2bb48589a16d4bed2f4b911be41e299f2d0fc0e0e20885"
+dependencies = [
+ "portable-atomic",
+ "portable_atomic_enum_macros",
+]
+
+[[package]]
+name = "portable_atomic_enum_macros"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a33fa6ec7f2047f572d49317cca19c87195de99c6e5b6ee492da701cfe02b053"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "proc-macro-crate"
@@ -951,12 +1144,16 @@ version = "0.1.0"
 dependencies = [
  "critical-section",
  "embassy-executor",
+ "embassy-net",
  "embassy-time",
+ "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",
  "esp-hal-embassy",
  "esp-println",
+ "esp-wifi",
  "log",
+ "smoltcp",
  "static_cell",
 ]
 
@@ -1020,6 +1217,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
+name = "smoltcp"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dad095989c1533c1c266d9b1e8d70a1329dd3723c3edac6d03bbd67e7bf6f4bb"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "cfg-if",
+ "defmt 0.3.100",
+ "heapless",
+ "managed",
+]
+
+[[package]]
 name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1080,6 +1291,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "thiserror"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+dependencies = [
+ "thiserror-impl",
+]
+
+[[package]]
+name = "thiserror-impl"
+version = "2.0.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
