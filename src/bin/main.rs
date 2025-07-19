@@ -9,18 +9,19 @@
 
 //extern crate alloc;
 
+use core::net::{Ipv4Addr, SocketAddrV4};
+
 use embassy_executor::Spawner;
-use embassy_net::{DhcpConfig, Runner, StackResources};
+use embassy_net::tcp::TcpSocket;
+use embassy_net::{DhcpConfig, IpListenEndpoint, Runner, StackResources};
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
-use esp_hal::peripherals::WIFI;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_println::println;
 use esp_wifi::wifi::{ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState};
 use esp_wifi::EspWifiController;
 use static_cell::StaticCell;
-
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -79,12 +80,12 @@ async fn main(spawner: Spawner) {
     let wifi_interface = interfaces.sta;
 
     let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
-    let tls_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
+    //let tls_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
 
     let net_config = embassy_net::Config::dhcpv4(DhcpConfig::default());
     
     // Init network stack
-    let (network_stack , runner) = embassy_net::new(
+    let (stack , runner) = embassy_net::new(
         wifi_interface,
         net_config,
         singleton!(StackResources::<3>::new()),
@@ -93,11 +94,58 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(connection_task(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
-
+    
+    
     loop {
-        Timer::after(Duration::from_secs(1)).await;
-        println!("spindi was here");
+        loop {
+            if ! stack.is_config_up() {
+                println!("Waiting for network stack to get configured...");
+                Timer::after(Duration::from_millis(1000)).await
+            }
+            else if let Some(config) = stack.config_v4() {
+                println!("Got IP: {}, gateway: {:?}, DNS: {:?}", config.address, config.gateway, config.dns_servers);
+                break;
+            }
+            else {
+                println!("X: error getting network config after is_config_up(). bad.");
+            }
+        }
+        
+        let mut rx_buffer = [0; 128];
+        let mut tx_buffer = [0; 128];
+
+        let mut sock = TcpSocket::new(stack, &mut rx_buffer, &mut tx_buffer);
+
+        if let Err(err) = sock.accept(IpListenEndpoint {
+                addr: None,
+                port: 8080,
+            }
+        ).await {
+            println!("E: accept: {:?}", err);
+        }
+        else {
+            println!("I: connection from {:?}", sock.remote_endpoint());
+            loop {
+                let mut buf = [0; 128];
+                match sock.read(&mut buf).await {
+                    Err(e) => {
+                        println!("E: {:?}",e);
+                        break;
+                    },
+                    Ok(0) => {
+                        println!("I: connection closed by remote");
+                        break;
+                    }
+                    Ok(bytes_read) => {
+                        println!("I: read {} bytes", bytes_read);
+                    }
+                }
+            }
+        }
+        
     }
+
+
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
 }
@@ -127,8 +175,8 @@ async fn connection_task(mut controller: WifiController<'static>) {
             _ => {}
         }
 
-        const SSID: &str = "BabyStube";
-        const PASSWORD: &str = "PaulaNadja1977";
+        const SSID: &str = "hacke";
+        const PASSWORD: &str = "hacke1234";
 
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
@@ -141,7 +189,7 @@ async fn connection_task(mut controller: WifiController<'static>) {
             controller.start_async().await.unwrap();
             println!("Wifi started!");
         }
-        println!("About to connect...");
+        println!("About to connect to SSID {} ...", SSID);
 
         match controller.connect_async().await {
             Ok(_) => println!("Wifi connected!"),
@@ -156,3 +204,11 @@ async fn connection_task(mut controller: WifiController<'static>) {
 
 
 
+/* 
+    * don't know why this isn't working
+
+let listen_address = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 8080);
+let listen_ep = IpListenEndpoint::from(listen_address);
+println!("I: listening on: {}", listen_ep);
+let x = sock.accept(listen_ep).await;
+*/
