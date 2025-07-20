@@ -19,7 +19,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::uart::{Parity, StopBits, UartRx};
+use esp_hal::uart::{Parity, StopBits, Uart, UartRx};
 use esp_hal::Async;
 use esp_println::println;
 use esp_wifi::wifi::{
@@ -100,15 +100,15 @@ async fn main(spawner: Spawner) {
     spawner.spawn(net_task(runner)).ok();
 
     let mut uart = {
-        const READ_BUF_SIZE: usize = 64;
         let config = esp_hal::uart::Config::default()
             .with_baudrate(115200)
             .with_data_bits(esp_hal::uart::DataBits::_8)
             .with_parity(Parity::None)
-            .with_stop_bits(StopBits::_1)
+            .with_stop_bits(StopBits::_1);
+            /*
             .with_rx(
-                esp_hal::uart::RxConfig::default().with_fifo_full_threshold(READ_BUF_SIZE as u16),
-            );
+                esp_hal::uart::RxConfig::default().with_fifo_full_threshold(64),
+            ); */
 
         let mut uart0 = esp_hal::uart::Uart::new(peripherals.UART0, config)
             .unwrap()
@@ -117,8 +117,10 @@ async fn main(spawner: Spawner) {
             .into_async();
 
         // EOT (CTRL-D)
-        const AT_CMD: u8 = 0x04;
-        uart0.set_at_cmd(esp_hal::uart::AtCmdConfig::default().with_cmd_char(AT_CMD));
+        //const AT_CMD: u8 = 0x04;
+        //uart0.set_at_cmd(esp_hal::uart::AtCmdConfig::default().with_cmd_char(AT_CMD));
+
+        println!("UART0 configuration: {:?}", config);
 
         uart0
     };
@@ -155,71 +157,75 @@ async fn main(spawner: Spawner) {
             let remote_ep = sock.remote_endpoint();
             println!("I: connection from {:?}", remote_ep);
 
-            let mut sock_buf = [0; 64];
-            let mut uart_buf = [0; 64];
-            loop {
-                let reads_in_flight = embassy_futures::select::select(
-                    sock.read(&mut sock_buf),
-                    uart.read_async(&mut uart_buf),
-                ).await;
-
-                match reads_in_flight {
-                    Either::First(sock_result) => match sock_result {
-                        Err(e) => {
-                            println!("E: sock.read(): {:?}", e);
-                            break;
-                        }
-                        Ok(0) => {
-                            println!("I: connection closed by remote");
-                            break;
-                        }
-                        Ok(bytes_read) => {
-                            
-                            match uart.write_async(&sock_buf[0..bytes_read]).await {
-                                Err(e) => println!("E: uart TxError {:?}", e),
-                                Ok(written) => {
-                                    if written != bytes_read {
-                                        println!(
-                                            "W: uart written != socket bytes_read:  {} != {}",
-                                            written, bytes_read
-                                        )
-                                    }
-                                    else {
-                                        println!("I: sock->uart: {} bytes, ", bytes_read);
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    Either::Second(uart_result) => match uart_result {
-                        Err(e) => {
-                            println!("W: uart RxError: {:?}", e);
-                        }
-                        Ok(0) => {
-                            println!("W: uart.read() returned 0 bytes read");
-                        }
-                        Ok(bytes_read) => {
-                            match sock.write(&uart_buf[0..bytes_read]).await {
-                                Err(e) => println!("E: socket.write TxError {:?}", e),
-                                Ok(written) => {
-                                    if written != bytes_read {
-                                        println!(
-                                            "W: socket written != uart bytes_read:  {} != {}",
-                                            written, bytes_read
-                                        )
-                                    }
-                                    else {
-                                        println!("I: uart->sock: {} bytes, ", bytes_read);
-                                    }
-                                }
-                            }
-                        }
-                    },
-                }
-            }
+            handle_conexión(&mut sock,&mut uart).await;
         }
     }
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
+}
+
+async fn handle_conexión(sock : &mut TcpSocket<'_>, uart : &mut Uart<'_, Async>) {
+    let mut sock_buf = [0; 64];
+    let mut uart_buf = [0; 64];
+    loop {
+        let reads_in_flight = embassy_futures::select::select(
+            sock.read(&mut sock_buf),
+            uart.read_async(&mut uart_buf),
+        ).await;
+
+        match reads_in_flight {
+            Either::First(sock_result) => match sock_result {
+                Err(e) => {
+                    println!("E: sock.read(): {:?}", e);
+                    break;
+                }
+                Ok(0) => {
+                    println!("I: connection closed by remote");
+                    break;
+                }
+                Ok(bytes_read) => {
+                    
+                    match uart.write_async(&sock_buf[0..bytes_read]).await {
+                        Err(e) => println!("E: uart TxError {:?}", e),
+                        Ok(written) => {
+                            if written != bytes_read {
+                                println!(
+                                    "W: uart written != socket bytes_read:  {} != {}",
+                                    written, bytes_read
+                                )
+                            }
+                            else {
+                                println!("I: sock->uart: {} bytes, ", bytes_read);
+                            }
+                        }
+                    }
+                }
+            },
+            Either::Second(uart_result) => match uart_result {
+                Err(e) => {
+                    println!("W: uart RxError: {:?}", e);
+                }
+                Ok(0) => {
+                    println!("W: uart.read() returned 0 bytes read");
+                }
+                Ok(bytes_read) => {
+                    match sock.write(&uart_buf[0..bytes_read]).await {
+                        Err(e) => println!("E: socket.write TxError {:?}", e),
+                        Ok(written) => {
+                            if written != bytes_read {
+                                println!(
+                                    "W: socket written != uart bytes_read:  {} != {}",
+                                    written, bytes_read
+                                )
+                            }
+                            else {
+                                println!("I: uart->sock: {} bytes, ", bytes_read);
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    }
 }
 
 #[embassy_executor::task]
