@@ -1147,7 +1147,6 @@ dependencies = [
  "embassy-futures",
  "embassy-net",
  "embassy-time",
- "embedded-io-async",
  "esp-alloc",
  "esp-bootloader-esp-idf",
  "esp-hal",

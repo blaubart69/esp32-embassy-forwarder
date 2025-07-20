@@ -10,7 +10,6 @@
 //extern crate alloc;
 
 use core::net::{Ipv4Addr, SocketAddrV4};
-use embedded_io_async::Write;
 use portable_atomic::AtomicUsize;
 
 use embassy_executor::Spawner;
@@ -48,14 +47,6 @@ macro_rules! mk_static {
     }};
 }
 
-macro_rules! singleton {
-    ($val:expr) => {{
-        type T = impl Sized;
-        static STATIC_CELL: StaticCell<T> = StaticCell::new();
-        let (x,) = STATIC_CELL.init(($val,));
-        x
-    }};
-}
 
 struct UartStats {
     bytes_read : AtomicUsize,
@@ -141,7 +132,7 @@ async fn main(spawner: Spawner) {
     let (stack, runner) = embassy_net::new(
         wifi_interface,
         net_config,
-        singleton!(StackResources::<3>::new()),
+        mk_static!(StackResources::<3>, StackResources::<3>::new()),
         net_seed,
     );
 
@@ -223,7 +214,7 @@ fn add_atom(x : &portable_atomic::AtomicUsize, val : usize) {
     x.add(val, core::sync::atomic::Ordering::Relaxed);
 }
 
-async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, Async>, stats : &mut Stats) {
+async fn handle_conexión(sock : &mut TcpSocket<'_>, uart : &mut Uart<'_, Async>, stats : &mut Stats) {
     let mut sock_buf = [0; 512];
     let mut uart_buf = [0; 512];
 
@@ -233,7 +224,7 @@ async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, As
     loop {
         let reads_in_flight = embassy_futures::select::select(
             sock.read(&mut sock_buf),
-            embedded_io_async::Read::read(&mut uart, &mut uart_buf)
+            uart.read_async(&mut uart_buf)
             //uart.read_async(&mut uart_buf),
         ).await;
 
@@ -251,7 +242,7 @@ async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, As
                 }
                 Ok(bytes_read) => {
                     add_atom(&stats.tcp.bytes_read, bytes_read);
-                    match embedded_io_async::Write::write(&mut uart, &sock_buf[0..bytes_read]).await {
+                    match uart.write_async(&sock_buf[0..bytes_read]).await {
                         Err(e) => {
                             //println!("E: uart write IoError {:?}", e);
                             inc_atom(&stats.uart.err_write);
@@ -270,7 +261,7 @@ async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, As
                 }
             },
             Either::Second(uart_result) => match uart_result {
-                Err( esp_hal::uart::IoError::Rx(rx_err) ) => {
+                Err( rx_err ) => {
                     match rx_err {
                         RxError::FifoOverflowed => {
                             inc_atom(&stats.uart.err_rx_fifo_overflowed);
@@ -280,10 +271,6 @@ async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, As
                         }
                     }
                 },
-                Err(io_err) => {
-                    println!("W: uart read IoError: {:?}", io_err);
-                    inc_atom(&stats.uart.err_read);
-                }
                 Ok(0) => {
                     println!("W: uart.read() returned 0 bytes read");
                 },
@@ -364,3 +351,13 @@ let listen_ep = IpListenEndpoint::from(listen_address);
 println!("I: listening on: {}", listen_ep);
 let x = sock.accept(listen_ep).await;
 */
+
+/* macro_rules! singleton {
+    ($val:expr) => {{
+        type T = impl Sized;
+        static STATIC_CELL: StaticCell<T> = StaticCell::new();
+        let (x,) = STATIC_CELL.init(($val,));
+        x
+    }};
+}
+ */
