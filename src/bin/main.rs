@@ -10,6 +10,7 @@
 //extern crate alloc;
 
 use core::net::{Ipv4Addr, SocketAddrV4};
+use portable_atomic::AtomicUsize;
 
 use embassy_executor::Spawner;
 use embassy_futures::select::Either;
@@ -19,7 +20,7 @@ use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::uart::{Parity, StopBits, Uart, UartRx};
+use esp_hal::uart::{Parity, RxConfig, RxError, StopBits, SwFlowControl, Uart, UartRx};
 use esp_hal::Async;
 use esp_println::println;
 use esp_wifi::wifi::{
@@ -55,6 +56,62 @@ macro_rules! singleton {
     }};
 }
 
+struct UartStats {
+    bytes_read : AtomicUsize,
+    bytes_written : AtomicUsize,
+    err_read : AtomicUsize,
+    err_write : AtomicUsize,
+    written_not_equal_read : AtomicUsize,
+    err_rx_fifo_overflowed : AtomicUsize
+}
+
+struct TcpStats {
+    bytes_read : AtomicUsize,
+    bytes_written : AtomicUsize,
+    connections : AtomicUsize,
+    err_read : AtomicUsize,
+    err_write : AtomicUsize,
+    written_not_equal_read : AtomicUsize
+}
+
+struct Stats {
+    uart : UartStats,
+    tcp : TcpStats
+}
+
+fn load_atom(x : &portable_atomic::AtomicUsize) -> usize {
+    x.load(core::sync::atomic::Ordering::Relaxed)
+}
+
+fn print_stats(s : &Stats) {
+    println!("TCP
+    bytes_read    : {}
+    bytes_written : {}
+    connections   : {}
+    err_read      : {}
+    err_write     : {}
+    written!=read : {}
+UART   
+    bytes_read    : {}
+    bytes_written : {}
+    err_read      : {}
+    err_write     : {}
+    written!=read : {}",
+    load_atom(&s.tcp.bytes_read)
+    ,load_atom(&s.tcp.bytes_written)
+    ,load_atom(&s.tcp.connections)
+    ,load_atom(&s.tcp.err_read)
+    ,load_atom(&s.tcp.err_write)
+    ,load_atom(&s.tcp.written_not_equal_read)
+
+    ,load_atom(&s.uart.bytes_read)
+    ,load_atom(&s.uart.bytes_written)
+    ,load_atom(&s.uart.err_read)
+    ,load_atom(&s.uart.err_write)
+    ,load_atom(&s.uart.written_not_equal_read)
+    );
+}
+
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -70,15 +127,6 @@ async fn main(spawner: Spawner) {
     static WIFI_CONTROLLER_CELL: StaticCell<EspWifiController> = StaticCell::new();
     let esp_wifi_ctrl = WIFI_CONTROLLER_CELL
         .init(esp_wifi::init(timer1.timer0, rng.clone(), peripherals.RADIO_CLK).unwrap());
-    /*
-    let esp_wifi_ctrl = singleton!(
-        esp_wifi::init(
-            timer1.timer0,
-            rng.clone(),
-            peripherals.RADIO_CLK,
-        )
-        .unwrap()
-    );*/
 
     let (controller, interfaces) = esp_wifi::wifi::new(esp_wifi_ctrl, peripherals.WIFI).unwrap();
     let wifi_interface = interfaces.sta;
@@ -96,21 +144,17 @@ async fn main(spawner: Spawner) {
         net_seed,
     );
 
-    spawner.spawn(connection_task(controller)).ok();
-    spawner.spawn(net_task(runner)).ok();
-
     let mut uart = {
         let config = esp_hal::uart::Config::default()
             .with_baudrate(115200)
             .with_data_bits(esp_hal::uart::DataBits::_8)
             .with_parity(Parity::None)
-            .with_stop_bits(StopBits::_1);
-            /*
+            .with_stop_bits(StopBits::_1)
             .with_rx(
                 esp_hal::uart::RxConfig::default().with_fifo_full_threshold(64),
-            ); */
+            );
 
-        let mut uart0 = esp_hal::uart::Uart::new(peripherals.UART0, config)
+        let uart0 = esp_hal::uart::Uart::new(peripherals.UART0, config)
             .unwrap()
             .with_tx(peripherals.GPIO21)
             .with_rx(peripherals.GPIO20)
@@ -125,8 +169,15 @@ async fn main(spawner: Spawner) {
         uart0
     };
 
-    let mut socket_rx_buffer = [0; 128];
-    let mut socket_tx_buffer = [0; 128];
+    spawner.spawn(connection_task(controller)).ok();
+    spawner.spawn(net_task(runner)).ok();
+
+    let mut socket_rx_buffer = [0; 1024];
+    let mut socket_tx_buffer = [0; 1024];
+
+    let mut stats = Stats {
+        uart : UartStats { bytes_read: 0.into(), bytes_written: 0.into(), err_read: 0.into(), err_write: 0.into(), written_not_equal_read: 0.into(), err_rx_fifo_overflowed : 0.into() }
+        , tcp: TcpStats { bytes_read: 0.into(), bytes_written: 0.into(), err_read: 0.into(), err_write: 0.into(), connections: 0.into(), written_not_equal_read : 0.into() } };
 
     loop {
         loop {
@@ -157,68 +208,98 @@ async fn main(spawner: Spawner) {
             let remote_ep = sock.remote_endpoint();
             println!("I: connection from {:?}", remote_ep);
 
-            handle_conexión(&mut sock,&mut uart).await;
+            handle_conexión(&mut sock,&mut uart, &mut stats).await;
         }
     }
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
 }
 
-async fn handle_conexión(sock : &mut TcpSocket<'_>, uart : &mut Uart<'_, Async>) {
-    let mut sock_buf = [0; 64];
-    let mut uart_buf = [0; 64];
+fn inc_atom(x : &portable_atomic::AtomicUsize) {
+    x.add(1, core::sync::atomic::Ordering::Relaxed);
+}
+
+fn add_atom(x : &portable_atomic::AtomicUsize, val : usize) {
+    x.add(val, core::sync::atomic::Ordering::Relaxed);
+}
+
+async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, Async>, stats : &mut Stats) {
+    let mut sock_buf = [0; 512];
+    let mut uart_buf = [0; 512];
+
+    inc_atom(&stats.tcp.connections);
+
     loop {
         let reads_in_flight = embassy_futures::select::select(
             sock.read(&mut sock_buf),
-            uart.read_async(&mut uart_buf),
+            embedded_io_async::Read::read(&mut uart, &mut uart_buf)
+            //uart.read_async(&mut uart_buf),
         ).await;
 
         match reads_in_flight {
             Either::First(sock_result) => match sock_result {
                 Err(e) => {
-                    println!("E: sock.read(): {:?}", e);
+                    inc_atom(&stats.tcp.err_read);
+                    //println!("E: sock.read(): {:?}", e);
                     break;
                 }
                 Ok(0) => {
                     println!("I: connection closed by remote");
+                    print_stats(&stats);
                     break;
                 }
                 Ok(bytes_read) => {
-                    
-                    match uart.write_async(&sock_buf[0..bytes_read]).await {
-                        Err(e) => println!("E: uart TxError {:?}", e),
+                    add_atom(&stats.tcp.bytes_read, bytes_read);
+                    match embedded_io_async::Write::write(&mut uart, &sock_buf[0..bytes_read]).await {
+                        Err(e) => {
+                            //println!("E: uart write IoError {:?}", e);
+                            inc_atom(&stats.uart.err_write);
+                        },
                         Ok(written) => {
                             if written != bytes_read {
-                                println!(
-                                    "W: uart written != socket bytes_read:  {} != {}",
-                                    written, bytes_read
-                                )
+                                //println!("W: uart written != socket bytes_read:  {} != {}",written, bytes_read);
+                                inc_atom(&stats.uart.written_not_equal_read);
                             }
                             else {
-                                println!("I: sock->uart: {} bytes, ", bytes_read);
+                                //println!("I: sock->uart: {} bytes", bytes_read);
+                                add_atom(&stats.uart.bytes_written, written);
                             }
                         }
                     }
                 }
             },
             Either::Second(uart_result) => match uart_result {
-                Err(e) => {
-                    println!("W: uart RxError: {:?}", e);
+                Err( esp_hal::uart::IoError::Rx(rx_err) ) => {
+                    match rx_err {
+                        RxError::FifoOverflowed => {
+                            inc_atom(&stats.uart.err_rx_fifo_overflowed);
+                        },
+                        _ => {
+                            inc_atom(&stats.uart.err_read);
+                        }
+                    }
+                },
+                Err(io_err) => {
+                    println!("W: uart read IoError: {:?}", io_err);
+                    inc_atom(&stats.uart.err_read);
                 }
                 Ok(0) => {
                     println!("W: uart.read() returned 0 bytes read");
-                }
+                },
                 Ok(bytes_read) => {
+                    add_atom(&stats.uart.bytes_read, bytes_read);
                     match sock.write(&uart_buf[0..bytes_read]).await {
-                        Err(e) => println!("E: socket.write TxError {:?}", e),
+                        Err(e) => {
+                            //println!("E: socket.write TxError {:?}", e);
+                            inc_atom(&stats.tcp.err_write);
+                        },
                         Ok(written) => {
                             if written != bytes_read {
-                                println!(
-                                    "W: socket written != uart bytes_read:  {} != {}",
-                                    written, bytes_read
-                                )
+                                //println!("W: socket written != uart bytes_read:  {} != {}",written, bytes_read);
+                                inc_atom(&stats.tcp.written_not_equal_read);
                             }
                             else {
-                                println!("I: uart->sock: {} bytes, ", bytes_read);
+                                //println!("I: uart->sock: {} bytes, ", bytes_read);
+                                add_atom(&stats.tcp.bytes_written, written);
                             }
                         }
                     }
