@@ -10,6 +10,7 @@
 //extern crate alloc;
 
 use core::net::{Ipv4Addr, SocketAddrV4};
+use embedded_io_async::Write;
 use portable_atomic::AtomicUsize;
 
 use embassy_executor::Spawner;
@@ -227,6 +228,7 @@ async fn handle_conexión(sock : &mut TcpSocket<'_>, mut uart : &mut Uart<'_, As
     let mut uart_buf = [0; 512];
 
     inc_atom(&stats.tcp.connections);
+    let _ = uart.flush();
 
     loop {
         let reads_in_flight = embassy_futures::select::select(
