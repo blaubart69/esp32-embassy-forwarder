@@ -312,8 +312,9 @@ async fn connection_task(mut controller: WifiController<'static>) {
             _ => {}
         }
 
-        const SSID: &str = "BabyStube";
-        const PASSWORD: &str = "PaulaNadja1977";
+        //const SSID: &str = "OpenWrt";
+        let SSID: &'static str = env!("ESP32_SSID");
+        let PASSWORD: &'static str = env!("ESP32_PASS");
 
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
