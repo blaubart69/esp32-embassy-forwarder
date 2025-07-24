@@ -12,6 +12,7 @@
 use core::net::{Ipv4Addr, SocketAddrV4};
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::pipe::Pipe;
+use embedded_io::Error;
 use log::{info};
 use portable_atomic::AtomicUsize;
 
@@ -158,7 +159,7 @@ async fn main(spawner: Spawner) {
 
     let (controller, interfaces) = esp_wifi::wifi::new(esp_wifi_ctrl, peripherals.WIFI).unwrap();
     let wifi_interface = interfaces.sta;
-
+    
     let net_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
     //let tls_seed = rng.random() as u64 | ((rng.random() as u64) << 32);
 
@@ -202,10 +203,8 @@ async fn main(spawner: Spawner) {
     accept_connection(stack, uart, &mut stats).await;
 }
 
-const PIPESIZE : usize = 1024;
+const PIPESIZE : usize = 2048;
 type MyPipe = Pipe<NoopRawMutex, PIPESIZE>;
-type MyPipeReader<'a> = embassy_sync::pipe::Reader<'a,NoopRawMutex, PIPESIZE>;
-type MyPipeWriter<'a> = embassy_sync::pipe::Writer<'a,NoopRawMutex, PIPESIZE>;
 
 async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stats: &mut Stats) {
     let mut socket_rx_buffer = [0; 1024];
@@ -243,12 +242,6 @@ async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stat
                 println!("I: connection from {:?}", remote_ep);
                 inc_atom(&stats.tcp.connections);
                 let (mut tcp_rx, mut tcp_tx) = sock.split();
-                /*
-                let _ = embassy_futures::select::select(
-                    tcp_read(&mut tcp_rx, &mut pipe_to_uart_tx),
-                    tcp_write(&mut tcp_tx, &mut pipe_to_tcp_rx),
-                ).await;
-                */
             
                 let _ = embassy_futures::select::select(
                     read_write(&mut tcp_rx, &mut pipe_to_uart_tx, true, "TcpRx->Pipe"),
@@ -261,12 +254,6 @@ async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stat
     };
 
     // Read + write from UART
-    /*
-    let uart_future = embassy_futures::join::join(
-        uart_read(&mut uart_rx, &mut pipe_to_tcp_tx),
-        uart_write(&mut uart_tx, &mut pipe_to_uart_rx),
-    );
-    */
     let uart_future = embassy_futures::join::join(
         read_write(&mut uart_rx,         &mut pipe_to_tcp_tx, false, "UartRx->Pipe"),
         read_write(&mut pipe_to_uart_rx, &mut uart_tx, false, "Pipe->UartTx"),
@@ -281,7 +268,7 @@ async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embed
     loop {
         match rx.read(&mut buf).await {
             Err( e) => {
-                println!("E: read() {} {:?}", context, e);
+                //println!("E: read() {} {:?}", context, e);
             }
             Ok(0) => {
                 if break_on_zero_read {
@@ -297,88 +284,7 @@ async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embed
         }
     }
 }
-/*
-async fn uart_read(
-    uart_rx: &mut UartRx<'_, Async>,
-    tcp_pipe_writer: &mut MyPipeWriter<'_>,
-) -> ! {
-    let mut buf = [0; 64];
-    loop {
-        match uart_rx.read_async(&mut buf).await {
-            Err(rxe) => println!("E: uart_read {:?}", rxe),
-            Ok(0) => println!("W: uart_read 0 bytes"),
-            Ok(bytes_read) => {
-                let data = &buf[..bytes_read];
-                //trace!("UART IN: {}", bytes_read);
-                //(*uart_pipe_writer).write(data).await;
-                tcp_pipe_writer.write(data).await;
-            }
-        }
-    }
-}
 
-async fn uart_write(
-    uart_tx: &mut UartTx<'_, Async>,
-    tcp_pipe_reader: &mut MyPipeReader<'_>,
-) -> ! {
-    let mut buf = [0; 64];
-    loop {
-        let bytes_read = tcp_pipe_reader.read(&mut buf).await;
-        let data = &buf[0..bytes_read];
-        match uart_tx.write_async(&data).await {
-            Err(e) => println!("E: uart_write {:?}", e),
-            Ok(0) => println!("E: uart_write 0 bytes"),
-            Ok(written) => {
-                //println!("uartTx written {}", written);
-            }
-        }
-    }
-}
-
-
-async fn tcp_write(
-    tcp_tx: &mut TcpWriter<'_>,
-    uart_pipe_reader: &mut MyPipeReader<'_>,
-) -> Result<(), embassy_net::tcp::Error> {
-    let mut buf = [0; 64];
-    loop {
-        let bytes_read = uart_pipe_reader.read(&mut buf).await;
-        let mut data = &buf[..bytes_read];
-        //trace!("TCP OUT: {}", bytes_read);
-
-        while !data.is_empty() {
-            match tcp_tx.write(data).await {
-                Ok(0) => panic!("write() returned Ok(0)"),
-                Ok(bytes_written) => data = &data[bytes_written..],
-                Err(e) => {
-                    println!("E: tcp_tx.write {:?}", e);
-                    return Err(e);
-                }
-            }
-        }
-    }
-}
-
-async fn tcp_read(
-    tcp_rx: &mut TcpReader<'_>,
-    uart_pipe_writer: &mut MyPipeWriter<'_>,
-) {
-    let mut buf = [0; 64];
-    loop {
-        match tcp_rx.read(&mut buf).await {
-            Err(e) => println!("E: tcp_read {:?}", e),
-            Ok(0) => break,
-            Ok(bytes_read) => {
-                let data = &buf[..bytes_read];
-                //trace!("TCP IN: {}", bytes_read);
-                //(*uart_pipe_writer).write(data).await;
-                uart_pipe_writer.write(data).await;
-            }
-        }
-    }
-    println!("EXIT tcp_read");
-}
-*/
 fn inc_atom(x: &portable_atomic::AtomicUsize) {
     x.add(1, core::sync::atomic::Ordering::Relaxed);
 }
@@ -468,3 +374,85 @@ let x = sock.accept(listen_ep).await;
     }};
 }
  */
+/*
+async fn uart_read(
+    uart_rx: &mut UartRx<'_, Async>,
+    tcp_pipe_writer: &mut MyPipeWriter<'_>,
+) -> ! {
+    let mut buf = [0; 64];
+    loop {
+        match uart_rx.read_async(&mut buf).await {
+            Err(rxe) => println!("E: uart_read {:?}", rxe),
+            Ok(0) => println!("W: uart_read 0 bytes"),
+            Ok(bytes_read) => {
+                let data = &buf[..bytes_read];
+                //trace!("UART IN: {}", bytes_read);
+                //(*uart_pipe_writer).write(data).await;
+                tcp_pipe_writer.write(data).await;
+            }
+        }
+    }
+}
+
+async fn uart_write(
+    uart_tx: &mut UartTx<'_, Async>,
+    tcp_pipe_reader: &mut MyPipeReader<'_>,
+) -> ! {
+    let mut buf = [0; 64];
+    loop {
+        let bytes_read = tcp_pipe_reader.read(&mut buf).await;
+        let data = &buf[0..bytes_read];
+        match uart_tx.write_async(&data).await {
+            Err(e) => println!("E: uart_write {:?}", e),
+            Ok(0) => println!("E: uart_write 0 bytes"),
+            Ok(written) => {
+                //println!("uartTx written {}", written);
+            }
+        }
+    }
+}
+
+
+async fn tcp_write(
+    tcp_tx: &mut TcpWriter<'_>,
+    uart_pipe_reader: &mut MyPipeReader<'_>,
+) -> Result<(), embassy_net::tcp::Error> {
+    let mut buf = [0; 64];
+    loop {
+        let bytes_read = uart_pipe_reader.read(&mut buf).await;
+        let mut data = &buf[..bytes_read];
+        //trace!("TCP OUT: {}", bytes_read);
+
+        while !data.is_empty() {
+            match tcp_tx.write(data).await {
+                Ok(0) => panic!("write() returned Ok(0)"),
+                Ok(bytes_written) => data = &data[bytes_written..],
+                Err(e) => {
+                    println!("E: tcp_tx.write {:?}", e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+async fn tcp_read(
+    tcp_rx: &mut TcpReader<'_>,
+    uart_pipe_writer: &mut MyPipeWriter<'_>,
+) {
+    let mut buf = [0; 64];
+    loop {
+        match tcp_rx.read(&mut buf).await {
+            Err(e) => println!("E: tcp_read {:?}", e),
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                let data = &buf[..bytes_read];
+                //trace!("TCP IN: {}", bytes_read);
+                //(*uart_pipe_writer).write(data).await;
+                uart_pipe_writer.write(data).await;
+            }
+        }
+    }
+    println!("EXIT tcp_read");
+}
+*/
