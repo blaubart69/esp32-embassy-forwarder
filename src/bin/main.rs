@@ -10,17 +10,19 @@
 //extern crate alloc;
 
 use core::net::{Ipv4Addr, SocketAddrV4};
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::pipe::Pipe;
+use log::{info};
 use portable_atomic::AtomicUsize;
 
 use embassy_executor::Spawner;
-use embassy_futures::select::Either;
-use embassy_net::tcp::{TcpSocket, TcpWriter};
-use embassy_net::{DhcpConfig, IpListenEndpoint, Runner, StackResources};
+use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
+use embassy_net::{DhcpConfig, IpListenEndpoint, Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::uart::{Parity, RxConfig, RxError, StopBits, SwFlowControl, Uart, UartRx};
+use esp_hal::uart::{self, Parity, RxConfig, RxError, StopBits, Uart, UartRx, UartTx};
 use esp_hal::Async;
 use esp_println::println;
 use esp_wifi::wifi::{
@@ -47,36 +49,71 @@ macro_rules! mk_static {
     }};
 }
 
-
 struct UartStats {
-    bytes_read : AtomicUsize,
-    bytes_written : AtomicUsize,
-    err_read : AtomicUsize,
-    err_write : AtomicUsize,
-    written_not_equal_read : AtomicUsize,
-    err_rx_fifo_overflowed : AtomicUsize
+    bytes_read: AtomicUsize,
+    bytes_written: AtomicUsize,
+    err_read: AtomicUsize,
+    err_write: AtomicUsize,
+    written_not_equal_read: AtomicUsize,
+    err_rx_fifo_overflowed: AtomicUsize,
+}
+
+impl UartStats {
+    fn new() -> Self {
+        UartStats {
+            bytes_read: 0.into(),
+            bytes_written: 0.into(),
+            err_read: 0.into(),
+            err_write: 0.into(),
+            written_not_equal_read: 0.into(),
+            err_rx_fifo_overflowed: 0.into(),
+        }
+    }
 }
 
 struct TcpStats {
-    bytes_read : AtomicUsize,
-    bytes_written : AtomicUsize,
-    connections : AtomicUsize,
-    err_read : AtomicUsize,
-    err_write : AtomicUsize,
-    written_not_equal_read : AtomicUsize
+    bytes_read: AtomicUsize,
+    bytes_written: AtomicUsize,
+    connections: AtomicUsize,
+    err_read: AtomicUsize,
+    err_write: AtomicUsize,
+    written_not_equal_read: AtomicUsize,
+}
+
+impl TcpStats {
+    fn new() -> Self {
+        TcpStats {
+            bytes_read: 0.into(),
+            bytes_written: 0.into(),
+            err_read: 0.into(),
+            err_write: 0.into(),
+            connections: 0.into(),
+            written_not_equal_read: 0.into(),
+        }
+    }
 }
 
 struct Stats {
-    uart : UartStats,
-    tcp : TcpStats
+    uart: UartStats,
+    tcp: TcpStats,
 }
 
-fn load_atom(x : &portable_atomic::AtomicUsize) -> usize {
+impl Stats {
+    fn new() -> Self {
+        Stats {
+            uart: UartStats::new(),
+            tcp: TcpStats::new(),
+        }
+    }
+}
+
+fn load_atom(x: &portable_atomic::AtomicUsize) -> usize {
     x.load(core::sync::atomic::Ordering::Relaxed)
 }
 
-fn print_stats(s : &Stats) {
-    println!("TCP
+fn print_stats(s: &Stats) {
+    println!(
+        "TCP
     bytes_read    : {}
     bytes_written : {}
     connections   : {}
@@ -89,18 +126,17 @@ UART
     err_read      : {}
     err_write     : {}
     written!=read : {}",
-    load_atom(&s.tcp.bytes_read)
-    ,load_atom(&s.tcp.bytes_written)
-    ,load_atom(&s.tcp.connections)
-    ,load_atom(&s.tcp.err_read)
-    ,load_atom(&s.tcp.err_write)
-    ,load_atom(&s.tcp.written_not_equal_read)
-
-    ,load_atom(&s.uart.bytes_read)
-    ,load_atom(&s.uart.bytes_written)
-    ,load_atom(&s.uart.err_read)
-    ,load_atom(&s.uart.err_write)
-    ,load_atom(&s.uart.written_not_equal_read)
+        load_atom(&s.tcp.bytes_read),
+        load_atom(&s.tcp.bytes_written),
+        load_atom(&s.tcp.connections),
+        load_atom(&s.tcp.err_read),
+        load_atom(&s.tcp.err_write),
+        load_atom(&s.tcp.written_not_equal_read),
+        load_atom(&s.uart.bytes_read),
+        load_atom(&s.uart.bytes_written),
+        load_atom(&s.uart.err_read),
+        load_atom(&s.uart.err_write),
+        load_atom(&s.uart.written_not_equal_read)
     );
 }
 
@@ -142,9 +178,7 @@ async fn main(spawner: Spawner) {
             .with_data_bits(esp_hal::uart::DataBits::_8)
             .with_parity(Parity::None)
             .with_stop_bits(StopBits::_1)
-            .with_rx(
-                esp_hal::uart::RxConfig::default().with_fifo_full_threshold(64),
-            );
+            .with_rx(esp_hal::uart::RxConfig::default().with_fifo_full_threshold(64));
 
         let uart0 = esp_hal::uart::Uart::new(peripherals.UART0, config)
             .unwrap()
@@ -164,136 +198,208 @@ async fn main(spawner: Spawner) {
     spawner.spawn(connection_task(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
+    let mut stats = Stats::new();
+    accept_connection(stack, uart, &mut stats).await;
+}
+
+const PIPESIZE : usize = 1024;
+type MyPipe = Pipe<NoopRawMutex, PIPESIZE>;
+type MyPipeReader<'a> = embassy_sync::pipe::Reader<'a,NoopRawMutex, PIPESIZE>;
+type MyPipeWriter<'a> = embassy_sync::pipe::Writer<'a,NoopRawMutex, PIPESIZE>;
+
+async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stats: &mut Stats) {
     let mut socket_rx_buffer = [0; 1024];
     let mut socket_tx_buffer = [0; 1024];
 
-    let mut stats = Stats {
-        uart : UartStats { bytes_read: 0.into(), bytes_written: 0.into(), err_read: 0.into(), err_write: 0.into(), written_not_equal_read: 0.into(), err_rx_fifo_overflowed : 0.into() }
-        , tcp: TcpStats { bytes_read: 0.into(), bytes_written: 0.into(), err_read: 0.into(), err_write: 0.into(), connections: 0.into(), written_not_equal_read : 0.into() } };
+    // Pipe setup
+    let mut pipe1: MyPipe = Pipe::new();
+    let (mut pipe_to_uart_rx, mut pipe_to_uart_tx) = pipe1.split();
 
-    loop {
+    // komisch mit de Doppepunkt um den Typen herum
+    //let (mut tcp_pipe_reader1, mut tcp_pipe_writer1) = Pipe::<NoopRawMutex, 20>::new().split();
+
+    let mut pipe2: MyPipe = Pipe::new();
+    let (mut pipe_to_tcp_rx, mut pipe_to_tcp_tx) = pipe2.split();
+
+    let _ = uart.flush();
+    // split()
+    let (mut uart_rx, mut uart_tx) = uart.split();
+
+    let tcp_future = async {
         loop {
-            if !stack.is_config_up() {
-                println!("Waiting for network stack to get configured...");
-                Timer::after(Duration::from_millis(1000)).await
-            } else if let Some(config) = stack.config_v4() {
-                println!(
-                    "Got IP: {}, gateway: {:?}, DNS: {:?}",
-                    config.address, config.gateway, config.dns_servers
-                );
-                break;
+            ensure_network(&stack).await;
+            let mut sock = TcpSocket::new(stack, &mut socket_rx_buffer, &mut socket_tx_buffer);
+            println!("I: waiting for connection");
+            if let Err(err) = sock
+                .accept(IpListenEndpoint {
+                    addr: None,
+                    port: 8080,
+                })
+                .await
+            {
+                println!("E: accept: {:?}", err);
             } else {
-                println!("X: error getting network config after is_config_up(). bad.");
+                let remote_ep = sock.remote_endpoint();
+                println!("I: connection from {:?}", remote_ep);
+                inc_atom(&stats.tcp.connections);
+                let (mut tcp_rx, mut tcp_tx) = sock.split();
+                /*
+                let _ = embassy_futures::select::select(
+                    tcp_read(&mut tcp_rx, &mut pipe_to_uart_tx),
+                    tcp_write(&mut tcp_tx, &mut pipe_to_tcp_rx),
+                ).await;
+                */
+            
+                let _ = embassy_futures::select::select(
+                    read_write(&mut tcp_rx, &mut pipe_to_uart_tx, true, "TcpRx->Pipe"),
+                    read_write(&mut pipe_to_tcp_rx, &mut tcp_tx, false, "Pipe->TcpTx"),
+                ).await;
+
+                info!("connection closed");
             }
         }
+    };
 
-        let mut sock = TcpSocket::new(stack, &mut socket_rx_buffer, &mut socket_tx_buffer);
-        if let Err(err) = sock
-            .accept(IpListenEndpoint {
-                addr: None,
-                port: 8080,
-            })
-            .await
-        {
-            println!("E: accept: {:?}", err);
-        } else {
-            let remote_ep = sock.remote_endpoint();
-            println!("I: connection from {:?}", remote_ep);
+    // Read + write from UART
+    /*
+    let uart_future = embassy_futures::join::join(
+        uart_read(&mut uart_rx, &mut pipe_to_tcp_tx),
+        uart_write(&mut uart_tx, &mut pipe_to_uart_rx),
+    );
+    */
+    let uart_future = embassy_futures::join::join(
+        read_write(&mut uart_rx,         &mut pipe_to_tcp_tx, false, "UartRx->Pipe"),
+        read_write(&mut pipe_to_uart_rx, &mut uart_tx, false, "Pipe->UartTx"),
+    );
 
-            handle_conexión(&mut sock,&mut uart, &mut stats).await;
-        }
-    }
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.0.0-beta.1/examples/src/bin
+    embassy_futures::join::join(tcp_future, uart_future).await;
+    println!("THIS IS THE END, SHOULD NEVER HAPPEN. (will happen for sure)")
 }
 
-fn inc_atom(x : &portable_atomic::AtomicUsize) {
+async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embedded_io_async::Write, break_on_zero_read : bool, context : &str) {
+    let mut buf = [0; 1024];
+    loop {
+        match rx.read(&mut buf).await {
+            Err( e) => {
+                println!("E: read() {} {:?}", context, e);
+            }
+            Ok(0) => {
+                if break_on_zero_read {
+                    break;
+                }
+            },
+            Ok(bytes_read) => {
+                match tx.write_all(&buf[0..bytes_read]).await {
+                    Err(e) => println!("E: write_all {}: {:?}", context,e),
+                    Ok(()) => {}
+                }
+            }
+        }
+    }
+}
+/*
+async fn uart_read(
+    uart_rx: &mut UartRx<'_, Async>,
+    tcp_pipe_writer: &mut MyPipeWriter<'_>,
+) -> ! {
+    let mut buf = [0; 64];
+    loop {
+        match uart_rx.read_async(&mut buf).await {
+            Err(rxe) => println!("E: uart_read {:?}", rxe),
+            Ok(0) => println!("W: uart_read 0 bytes"),
+            Ok(bytes_read) => {
+                let data = &buf[..bytes_read];
+                //trace!("UART IN: {}", bytes_read);
+                //(*uart_pipe_writer).write(data).await;
+                tcp_pipe_writer.write(data).await;
+            }
+        }
+    }
+}
+
+async fn uart_write(
+    uart_tx: &mut UartTx<'_, Async>,
+    tcp_pipe_reader: &mut MyPipeReader<'_>,
+) -> ! {
+    let mut buf = [0; 64];
+    loop {
+        let bytes_read = tcp_pipe_reader.read(&mut buf).await;
+        let data = &buf[0..bytes_read];
+        match uart_tx.write_async(&data).await {
+            Err(e) => println!("E: uart_write {:?}", e),
+            Ok(0) => println!("E: uart_write 0 bytes"),
+            Ok(written) => {
+                //println!("uartTx written {}", written);
+            }
+        }
+    }
+}
+
+
+async fn tcp_write(
+    tcp_tx: &mut TcpWriter<'_>,
+    uart_pipe_reader: &mut MyPipeReader<'_>,
+) -> Result<(), embassy_net::tcp::Error> {
+    let mut buf = [0; 64];
+    loop {
+        let bytes_read = uart_pipe_reader.read(&mut buf).await;
+        let mut data = &buf[..bytes_read];
+        //trace!("TCP OUT: {}", bytes_read);
+
+        while !data.is_empty() {
+            match tcp_tx.write(data).await {
+                Ok(0) => panic!("write() returned Ok(0)"),
+                Ok(bytes_written) => data = &data[bytes_written..],
+                Err(e) => {
+                    println!("E: tcp_tx.write {:?}", e);
+                    return Err(e);
+                }
+            }
+        }
+    }
+}
+
+async fn tcp_read(
+    tcp_rx: &mut TcpReader<'_>,
+    uart_pipe_writer: &mut MyPipeWriter<'_>,
+) {
+    let mut buf = [0; 64];
+    loop {
+        match tcp_rx.read(&mut buf).await {
+            Err(e) => println!("E: tcp_read {:?}", e),
+            Ok(0) => break,
+            Ok(bytes_read) => {
+                let data = &buf[..bytes_read];
+                //trace!("TCP IN: {}", bytes_read);
+                //(*uart_pipe_writer).write(data).await;
+                uart_pipe_writer.write(data).await;
+            }
+        }
+    }
+    println!("EXIT tcp_read");
+}
+*/
+fn inc_atom(x: &portable_atomic::AtomicUsize) {
     x.add(1, core::sync::atomic::Ordering::Relaxed);
 }
 
-fn add_atom(x : &portable_atomic::AtomicUsize, val : usize) {
+fn add_atom(x: &portable_atomic::AtomicUsize, val: usize) {
     x.add(val, core::sync::atomic::Ordering::Relaxed);
 }
 
-async fn handle_conexión(sock : &mut TcpSocket<'_>, uart : &mut Uart<'_, Async>, stats : &mut Stats) {
-    let mut sock_buf = [0; 512];
-    let mut uart_buf = [0; 512];
-
-    inc_atom(&stats.tcp.connections);
-    let _ = uart.flush();
-
+async fn ensure_network(stack: &Stack<'_>) {
     loop {
-        let reads_in_flight = embassy_futures::select::select(
-            sock.read(&mut sock_buf),
-            uart.read_async(&mut uart_buf)
-            //uart.read_async(&mut uart_buf),
-        ).await;
-
-        match reads_in_flight {
-            Either::First(sock_result) => match sock_result {
-                Err(e) => {
-                    inc_atom(&stats.tcp.err_read);
-                    //println!("E: sock.read(): {:?}", e);
-                    break;
-                }
-                Ok(0) => {
-                    println!("I: connection closed by remote");
-                    print_stats(&stats);
-                    break;
-                }
-                Ok(bytes_read) => {
-                    add_atom(&stats.tcp.bytes_read, bytes_read);
-                    match uart.write_async(&sock_buf[0..bytes_read]).await {
-                        Err(e) => {
-                            //println!("E: uart write IoError {:?}", e);
-                            inc_atom(&stats.uart.err_write);
-                        },
-                        Ok(written) => {
-                            if written != bytes_read {
-                                //println!("W: uart written != socket bytes_read:  {} != {}",written, bytes_read);
-                                inc_atom(&stats.uart.written_not_equal_read);
-                            }
-                            else {
-                                //println!("I: sock->uart: {} bytes", bytes_read);
-                                add_atom(&stats.uart.bytes_written, written);
-                            }
-                        }
-                    }
-                }
-            },
-            Either::Second(uart_result) => match uart_result {
-                Err( rx_err ) => {
-                    match rx_err {
-                        RxError::FifoOverflowed => {
-                            inc_atom(&stats.uart.err_rx_fifo_overflowed);
-                        },
-                        _ => {
-                            inc_atom(&stats.uart.err_read);
-                        }
-                    }
-                },
-                Ok(0) => {
-                    println!("W: uart.read() returned 0 bytes read");
-                },
-                Ok(bytes_read) => {
-                    add_atom(&stats.uart.bytes_read, bytes_read);
-                    match sock.write(&uart_buf[0..bytes_read]).await {
-                        Err(e) => {
-                            //println!("E: socket.write TxError {:?}", e);
-                            inc_atom(&stats.tcp.err_write);
-                        },
-                        Ok(written) => {
-                            if written != bytes_read {
-                                //println!("W: socket written != uart bytes_read:  {} != {}",written, bytes_read);
-                                inc_atom(&stats.tcp.written_not_equal_read);
-                            }
-                            else {
-                                //println!("I: uart->sock: {} bytes, ", bytes_read);
-                                add_atom(&stats.tcp.bytes_written, written);
-                            }
-                        }
-                    }
-                }
-            },
+        if !stack.is_config_up() {
+            println!("Waiting for network stack to get configured...");
+            Timer::after(Duration::from_millis(1000)).await
+        } else if let Some(config) = stack.config_v4() {
+            println!(
+                "Got IP: {}, gateway: {:?}, DNS: {:?}",
+                config.address, config.gateway, config.dns_servers
+            );
+            break;
+        } else {
+            println!("X: error getting network config after is_config_up(). bad.");
         }
     }
 }
