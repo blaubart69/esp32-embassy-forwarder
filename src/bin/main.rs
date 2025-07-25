@@ -173,7 +173,7 @@ async fn main(spawner: Spawner) {
         net_seed,
     );
 
-    let mut uart = {
+    let uart = {
         let config = esp_hal::uart::Config::default()
             .with_baudrate(115200)
             .with_data_bits(esp_hal::uart::DataBits::_8)
@@ -210,18 +210,13 @@ async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stat
     let mut socket_rx_buffer = [0; 1024];
     let mut socket_tx_buffer = [0; 1024];
 
-    // Pipe setup
     let mut pipe1: MyPipe = Pipe::new();
     let (mut pipe_to_uart_rx, mut pipe_to_uart_tx) = pipe1.split();
-
-    // komisch mit de Doppepunkt um den Typen herum
-    //let (mut tcp_pipe_reader1, mut tcp_pipe_writer1) = Pipe::<NoopRawMutex, 20>::new().split();
 
     let mut pipe2: MyPipe = Pipe::new();
     let (mut pipe_to_tcp_rx, mut pipe_to_tcp_tx) = pipe2.split();
 
     let _ = uart.flush();
-    // split()
     let (mut uart_rx, mut uart_tx) = uart.split();
 
     let tcp_future = async {
