@@ -108,24 +108,6 @@ async fn main(spawner: Spawner) {
     forward::accept_connection(stack, uart, &mut stats).await;
 }
 
-
-async fn ensure_network(stack: &Stack<'_>) {
-    loop {
-        if !stack.is_config_up() {
-            println!("Waiting for network stack to get configured...");
-            Timer::after(Duration::from_millis(1000)).await
-        } else if let Some(config) = stack.config_v4() {
-            println!(
-                "Got IP: {}, gateway: {:?}, DNS: {:?}",
-                config.address, config.gateway, config.dns_servers
-            );
-            break;
-        } else {
-            println!("X: error getting network config after is_config_up(). bad.");
-        }
-    }
-}
-
 #[embassy_executor::task]
 async fn connection_task(mut controller: WifiController<'static>) {
     println!("start connection task");

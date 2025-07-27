@@ -1,13 +1,32 @@
 use embassy_net::{tcp::TcpSocket, IpListenEndpoint, Stack};
 use embassy_sync::{blocking_mutex::raw::NoopRawMutex, pipe::Pipe};
+use embassy_time::{Duration, Timer};
 use esp_hal::{uart::Uart, Async};
 use esp_println::println;
 use log::info;
 
 use crate::stats::Stats;
+use crate::claude;
 
 const PIPESIZE : usize = 2048;
 type MyPipe = Pipe<NoopRawMutex, PIPESIZE>;
+
+async fn ensure_network(stack: &Stack<'_>) {
+    loop {
+        if !stack.is_config_up() {
+            println!("Waiting for network stack to get configured...");
+            Timer::after(Duration::from_millis(1000)).await
+        } else if let Some(config) = stack.config_v4() {
+            println!(
+                "Got IP: {}, gateway: {:?}, DNS: {:?}",
+                config.address, config.gateway, config.dns_servers
+            );
+            break;
+        } else {
+            println!("X: error getting network config after is_config_up(). bad.");
+        }
+    }
+}
 
 pub async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stats: &mut Stats) {
     let mut socket_rx_buffer = [0; 1024];
@@ -25,7 +44,7 @@ pub async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut 
     let tcp_future = async {
         loop {
             // TODO: not sure IF it's needed... or how I should do it here
-            //ensure_network(&stack).await;
+            ensure_network(&stack).await;
             let mut sock = TcpSocket::new(stack, &mut socket_rx_buffer, &mut socket_tx_buffer);
             println!("I: waiting for connection");
             if let Err(err) = sock
@@ -43,8 +62,8 @@ pub async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut 
                 let (mut tcp_rx, mut tcp_tx) = sock.split();
             
                 let _ = embassy_futures::select::select(
-                    read_write(&mut tcp_rx, &mut pipe_to_uart_tx, true, "TcpRx->Pipe"),
-                    read_write(&mut pipe_to_tcp_rx, &mut tcp_tx, false, "Pipe->TcpTx"),
+                    claude::read_write(&mut tcp_rx, &mut pipe_to_uart_tx, true, "TcpRx->Pipe"),
+                    claude::read_write(&mut pipe_to_tcp_rx, &mut tcp_tx, false, "Pipe->TcpTx"),
                 ).await;
 
                 info!("connection closed");
@@ -54,14 +73,15 @@ pub async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut 
 
     // Read + write from UART
     let uart_future = embassy_futures::join::join(
-        read_write(&mut uart_rx,         &mut pipe_to_tcp_tx, false, "UartRx->Pipe"),
-        read_write(&mut pipe_to_uart_rx, &mut uart_tx, false, "Pipe->UartTx"),
+        claude::read_write(&mut uart_rx,         &mut pipe_to_tcp_tx, false, "UartRx->Pipe"),
+        claude::read_write(&mut pipe_to_uart_rx, &mut uart_tx, false, "Pipe->UartTx"),
     );
 
     embassy_futures::join::join(tcp_future, uart_future).await;
-    println!("THIS IS THE END, SHOULD NEVER HAPPEN. (will happen for sure)")
+    println!("THIS IS THE END, SHOULD NEVER HAPPEN. (will happen for sure)");
 }
 
+/*
 async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embedded_io_async::Write, break_on_zero_read : bool, context : &str) {
     let mut buf = [0; 1024];
     loop {
@@ -83,6 +103,7 @@ async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embed
         }
     }
 }
+     */
 
 
 
