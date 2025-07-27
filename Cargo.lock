@@ -734,6 +734,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "espfwd"
+version = "0.1.0"
+dependencies = [
+ "critical-section",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-sync 0.7.0",
+ "embassy-time",
+ "embedded-io",
+ "embedded-io-async",
+ "esp-alloc",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-hal-embassy",
+ "esp-println",
+ "esp-wifi",
+ "log",
+ "portable-atomic",
+ "smoltcp",
+ "static_cell",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1150,30 +1174,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
-]
-
-[[package]]
-name = "rust5"
-version = "0.1.0"
-dependencies = [
- "critical-section",
- "embassy-executor",
- "embassy-futures",
- "embassy-net",
- "embassy-sync 0.7.0",
- "embassy-time",
- "embedded-io",
- "embedded-io-async",
- "esp-alloc",
- "esp-bootloader-esp-idf",
- "esp-hal",
- "esp-hal-embassy",
- "esp-println",
- "esp-wifi",
- "log",
- "portable-atomic",
- "smoltcp",
- "static_cell",
 ]
 
 [[package]]

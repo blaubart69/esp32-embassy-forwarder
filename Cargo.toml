@@ -1,10 +1,10 @@
 [package]
 edition = "2021"
-name    = "rust5"
+name    = "espfwd"
 version = "0.1.0"
 
 [[bin]]
-name = "rust5"
+name = "espfwd"
 path = "./src/bin/main.rs"
 
 [dependencies]

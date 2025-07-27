@@ -9,28 +9,21 @@
 
 //extern crate alloc;
 
-use core::net::{Ipv4Addr, SocketAddrV4};
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::pipe::Pipe;
-use embedded_io::Error;
-use log::{info};
-use portable_atomic::AtomicUsize;
-
 use embassy_executor::Spawner;
-use embassy_net::tcp::{TcpReader, TcpSocket, TcpWriter};
-use embassy_net::{DhcpConfig, IpListenEndpoint, Runner, Stack, StackResources};
+use embassy_net::{DhcpConfig, Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal::uart::{self, Parity, RxConfig, RxError, StopBits, Uart, UartRx, UartTx};
-use esp_hal::Async;
+use esp_hal::uart::{Parity, StopBits};
 use esp_println::println;
 use esp_wifi::wifi::{
     ClientConfiguration, Configuration, WifiController, WifiDevice, WifiEvent, WifiState,
 };
 use esp_wifi::EspWifiController;
 use static_cell::StaticCell;
+
+use espfwd::forward;
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
@@ -50,96 +43,8 @@ macro_rules! mk_static {
     }};
 }
 
-struct UartStats {
-    bytes_read: AtomicUsize,
-    bytes_written: AtomicUsize,
-    err_read: AtomicUsize,
-    err_write: AtomicUsize,
-    written_not_equal_read: AtomicUsize,
-    err_rx_fifo_overflowed: AtomicUsize,
-}
 
-impl UartStats {
-    fn new() -> Self {
-        UartStats {
-            bytes_read: 0.into(),
-            bytes_written: 0.into(),
-            err_read: 0.into(),
-            err_write: 0.into(),
-            written_not_equal_read: 0.into(),
-            err_rx_fifo_overflowed: 0.into(),
-        }
-    }
-}
 
-struct TcpStats {
-    bytes_read: AtomicUsize,
-    bytes_written: AtomicUsize,
-    connections: AtomicUsize,
-    err_read: AtomicUsize,
-    err_write: AtomicUsize,
-    written_not_equal_read: AtomicUsize,
-}
-
-impl TcpStats {
-    fn new() -> Self {
-        TcpStats {
-            bytes_read: 0.into(),
-            bytes_written: 0.into(),
-            err_read: 0.into(),
-            err_write: 0.into(),
-            connections: 0.into(),
-            written_not_equal_read: 0.into(),
-        }
-    }
-}
-
-struct Stats {
-    uart: UartStats,
-    tcp: TcpStats,
-}
-
-impl Stats {
-    fn new() -> Self {
-        Stats {
-            uart: UartStats::new(),
-            tcp: TcpStats::new(),
-        }
-    }
-}
-
-fn load_atom(x: &portable_atomic::AtomicUsize) -> usize {
-    x.load(core::sync::atomic::Ordering::Relaxed)
-}
-
-fn print_stats(s: &Stats) {
-    println!(
-        "TCP
-    bytes_read    : {}
-    bytes_written : {}
-    connections   : {}
-    err_read      : {}
-    err_write     : {}
-    written!=read : {}
-UART   
-    bytes_read    : {}
-    bytes_written : {}
-    err_read      : {}
-    err_write     : {}
-    written!=read : {}",
-        load_atom(&s.tcp.bytes_read),
-        load_atom(&s.tcp.bytes_written),
-        load_atom(&s.tcp.connections),
-        load_atom(&s.tcp.err_read),
-        load_atom(&s.tcp.err_write),
-        load_atom(&s.tcp.written_not_equal_read),
-        load_atom(&s.uart.bytes_read),
-        load_atom(&s.uart.bytes_written),
-        load_atom(&s.uart.err_read),
-        load_atom(&s.uart.err_write),
-        load_atom(&s.uart.written_not_equal_read)
-    );
-}
 
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
@@ -199,94 +104,10 @@ async fn main(spawner: Spawner) {
     spawner.spawn(connection_task(controller)).ok();
     spawner.spawn(net_task(runner)).ok();
 
-    let mut stats = Stats::new();
-    accept_connection(stack, uart, &mut stats).await;
+    let mut stats = espfwd::stats::Stats::new();
+    forward::accept_connection(stack, uart, &mut stats).await;
 }
 
-const PIPESIZE : usize = 2048;
-type MyPipe = Pipe<NoopRawMutex, PIPESIZE>;
-
-async fn accept_connection(stack: Stack<'_>, mut uart: Uart<'_, Async>, mut stats: &mut Stats) {
-    let mut socket_rx_buffer = [0; 1024];
-    let mut socket_tx_buffer = [0; 1024];
-
-    let mut pipe1: MyPipe = Pipe::new();
-    let (mut pipe_to_uart_rx, mut pipe_to_uart_tx) = pipe1.split();
-
-    let mut pipe2: MyPipe = Pipe::new();
-    let (mut pipe_to_tcp_rx, mut pipe_to_tcp_tx) = pipe2.split();
-
-    let _ = uart.flush();
-    let (mut uart_rx, mut uart_tx) = uart.split();
-
-    let tcp_future = async {
-        loop {
-            ensure_network(&stack).await;
-            let mut sock = TcpSocket::new(stack, &mut socket_rx_buffer, &mut socket_tx_buffer);
-            println!("I: waiting for connection");
-            if let Err(err) = sock
-                .accept(IpListenEndpoint {
-                    addr: None,
-                    port: 8080,
-                })
-                .await
-            {
-                println!("E: accept: {:?}", err);
-            } else {
-                let remote_ep = sock.remote_endpoint();
-                println!("I: connection from {:?}", remote_ep);
-                inc_atom(&stats.tcp.connections);
-                let (mut tcp_rx, mut tcp_tx) = sock.split();
-            
-                let _ = embassy_futures::select::select(
-                    read_write(&mut tcp_rx, &mut pipe_to_uart_tx, true, "TcpRx->Pipe"),
-                    read_write(&mut pipe_to_tcp_rx, &mut tcp_tx, false, "Pipe->TcpTx"),
-                ).await;
-
-                info!("connection closed");
-            }
-        }
-    };
-
-    // Read + write from UART
-    let uart_future = embassy_futures::join::join(
-        read_write(&mut uart_rx,         &mut pipe_to_tcp_tx, false, "UartRx->Pipe"),
-        read_write(&mut pipe_to_uart_rx, &mut uart_tx, false, "Pipe->UartTx"),
-    );
-
-    embassy_futures::join::join(tcp_future, uart_future).await;
-    println!("THIS IS THE END, SHOULD NEVER HAPPEN. (will happen for sure)")
-}
-
-async fn read_write(rx : &mut impl embedded_io_async::Read, tx : &mut impl embedded_io_async::Write, break_on_zero_read : bool, context : &str) {
-    let mut buf = [0; 1024];
-    loop {
-        match rx.read(&mut buf).await {
-            Err( e) => {
-                //println!("E: read() {} {:?}", context, e);
-            }
-            Ok(0) => {
-                if break_on_zero_read {
-                    break;
-                }
-            },
-            Ok(bytes_read) => {
-                match tx.write_all(&buf[0..bytes_read]).await {
-                    Err(e) => println!("E: write_all {}: {:?}", context,e),
-                    Ok(()) => {}
-                }
-            }
-        }
-    }
-}
-
-fn inc_atom(x: &portable_atomic::AtomicUsize) {
-    x.add(1, core::sync::atomic::Ordering::Relaxed);
-}
-
-fn add_atom(x: &portable_atomic::AtomicUsize, val: usize) {
-    x.add(val, core::sync::atomic::Ordering::Relaxed);
-}
 
 async fn ensure_network(stack: &Stack<'_>) {
     loop {
@@ -320,13 +141,13 @@ async fn connection_task(mut controller: WifiController<'static>) {
         }
 
         //const SSID: &str = "OpenWrt";
-        let SSID: &'static str = env!("ESP32_SSID");
-        let PASSWORD: &'static str = env!("ESP32_PASS");
+        let ssid: &'static str = env!("ESP32_SSID");
+        let password: &'static str = env!("ESP32_PASS");
 
         if !matches!(controller.is_started(), Ok(true)) {
             let client_config = Configuration::Client(ClientConfiguration {
-                ssid: SSID.try_into().unwrap(),
-                password: PASSWORD.try_into().unwrap(),
+                ssid: ssid.try_into().unwrap(),
+                password: password.try_into().unwrap(),
                 ..Default::default()
             });
             controller.set_configuration(&client_config).unwrap();
@@ -334,7 +155,7 @@ async fn connection_task(mut controller: WifiController<'static>) {
             controller.start_async().await.unwrap();
             println!("Wifi started!");
         }
-        println!("About to connect to SSID {} ...", SSID);
+        println!("About to connect to SSID {} ...", ssid);
 
         match controller.connect_async().await {
             Ok(_) => println!("Wifi connected!"),
