@@ -31,7 +31,7 @@ impl ErrorHandler for uart::RxError {
                 ErrorAction::Continue
             },
             uart::RxError::GlitchOccurred => {
-                println!("E: UartRx {} {}", self, context);
+                //println!("E: UartRx {} {}", self, context);
                 ErrorAction::Continue
             },
             uart::RxError::ParityMismatch => {

@@ -13,6 +13,7 @@ use embassy_executor::Spawner;
 use embassy_net::{DhcpConfig, Runner, Stack, StackResources};
 use embassy_time::{Duration, Timer};
 use esp_hal::clock::CpuClock;
+use esp_hal::gpio::{Input, InputConfig, Level, Output, OutputConfig, Pull};
 use esp_hal::timer::systimer::SystemTimer;
 use esp_hal::timer::timg::TimerGroup;
 use esp_hal::uart::{Parity, StopBits};
@@ -43,9 +44,6 @@ macro_rules! mk_static {
     }};
 }
 
-
-
-
 #[esp_hal_embassy::main]
 async fn main(spawner: Spawner) {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
@@ -54,6 +52,21 @@ async fn main(spawner: Spawner) {
     esp_hal_embassy::init(timer0.alarm0);
     esp_println::logger::init_logger(log::LevelFilter::Info);
     esp_alloc::heap_allocator!(size: 64 * 1024);
+
+    //let mut led = Output::new(peripherals.GPIO0, Level::High, OutputConfig::default());
+
+    let _ = Output::new(peripherals.GPIO0, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO1, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO2, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO4, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO5, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO6, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO7, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO8, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO9, Level::Low, OutputConfig::default());
+    let _ = Output::new(peripherals.GPIO10, Level::Low, OutputConfig::default());
+    // let _ = Output::new(peripherals.GPIO18, Level::Low, OutputConfig::default()); --> broken pipe
 
     let mut rng = esp_hal::rng::Rng::new(peripherals.RNG);
 
@@ -80,7 +93,7 @@ async fn main(spawner: Spawner) {
 
     let uart = {
         let config = esp_hal::uart::Config::default()
-            .with_baudrate(115200)
+            .with_baudrate(460800)
             .with_data_bits(esp_hal::uart::DataBits::_8)
             .with_parity(Parity::None)
             .with_stop_bits(StopBits::_1)
